@@ -1,0 +1,51 @@
+# pyproject.toml — The Shepherd's Console
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shepherds-console"
+version = "0.1.0"
+description = "Single-pane operations for working animal infrastructure"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "SuperInstance" }]
+keywords = ["operations", "dashboard", "working-animal-architecture", "infrastructure"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+rich = ["rich>=13.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "rich>=13.0",
+]
+
+[project.scripts]
+shepherds-console = "shepherds_console.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/SuperInstance/shepherds-console"
+Repository = "https://github.com/SuperInstance/shepherds-console"
+Issues = "https://github.com/SuperInstance/shepherds-console/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
