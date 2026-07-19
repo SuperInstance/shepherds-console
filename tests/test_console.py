@@ -239,3 +239,68 @@ class TestEnums:
     def test_severity_values(self):
         assert Severity.INFO.value == "info"
         assert Severity.CRITICAL.value == "critical"
+
+
+class TestBugFixes:
+    """Regression tests for bugs found in v0.1.0 audit."""
+
+    def test_fence_status_gap_at_0_7(self, console):
+        """Bug: Fence.status() had gap at budget_fraction=0.7 returning 'healthy' instead of 'moderate'."""
+        f = Fence(name="test", limit=100)
+        f.consumed = 30  # 70% remaining = 0.7 budget_fraction
+        assert f.budget_fraction == pytest.approx(0.7)
+        assert f.status == "moderate", "budget_fraction=0.7 should return moderate"
+
+    def test_fence_consume_negative_amount(self, console):
+        """Bug: Fence.consume() allowed negative amounts, reducing consumed value."""
+        f = Fence(name="test", limit=100)
+        f.consumed = 50
+        with pytest.raises(ValueError, match="must be non-negative"):
+            f.consume(-10)
+        assert f.consumed == 50, "consumed should not change after negative consume attempt"
+
+    def test_add_pasture_negative_capacity(self, console):
+        """Bug: add_pasture() allowed negative capacity values."""
+        with pytest.raises(ValueError, match="capacity must be non-negative"):
+            console.add_pasture("bad", capacity=-5)
+
+    def test_add_fence_negative_limit(self, console):
+        """Bug: add_fence() allowed negative limit values."""
+        with pytest.raises(ValueError, match="limit must be non-negative"):
+            console.add_fence("bad", limit=-100)
+
+    def test_complete_task_negative_cost(self, console):
+        """Bug: complete_task() allowed negative cost, causing negative consumed."""
+        with pytest.raises(ValueError, match="cost must be non-negative"):
+            console.complete_task("worker-a", cost=-50)
+
+    def test_assign_duplicate_animal_in_pasture(self, console):
+        """Bug: assign() could duplicate animals in pasture list when old pasture didn't exist."""
+        # Create scenario where animal's pasture reference points to non-existent pasture
+        c = ShepherdsConsole()
+        c.add_pasture("pasture-a")
+        a = c.add_animal("test-animal", pasture="pasture-a")
+        # Corrupt state (simulating scenario where old pasture was removed)
+        a.pasture = "nonexistent"
+        # Assign back to existing pasture
+        c.assign("test-animal", "pasture-a")
+        # Should only appear once
+        assert c.pastures["pasture-a"].animals.count("test-animal") == 1
+
+    def test_assign_same_pasture_twice(self, console):
+        """Bug: assign() could duplicate when assigning to same pasture multiple times."""
+        c = ShepherdsConsole()
+        c.add_pasture("p1")
+        c.add_animal("a1", pasture="p1")
+        c.assign("a1", "p1")  # Assign to same pasture
+        c.assign("a1", "p1")  # Assign again
+        assert c.pastures["p1"].animals.count("a1") == 1, "Should not duplicate"
+
+    def test_fence_consume_zero_amount(self, console):
+        """Test that zero amount consumption is handled correctly."""
+        f = Fence(name="test", limit=100)
+        f.consumed = 50
+        # Zero should be allowed (no-op)
+        result = f.consume(0)
+        assert result is True
+        assert f.consumed == 50

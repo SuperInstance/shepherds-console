@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = [
     "ShepherdsConsole",
     "Pasture",
@@ -138,12 +138,14 @@ class Fence:
             return "critical"
         if frac < 0.3:
             return "low"
-        if frac < 0.7:
+        if frac <= 0.7:
             return "moderate"
         return "healthy"
 
     def consume(self, amount: float) -> bool:
         """Try to consume from the budget. Returns True if allowed."""
+        if amount < 0:
+            raise ValueError(f"consume amount must be non-negative, got {amount}")
         if not self.enabled:
             return True
         if self.consumed + amount > self.limit:
@@ -211,6 +213,8 @@ class ShepherdsConsole:
         capacity: int = 10,
     ) -> Pasture:
         """Register a new pasture (PLATO room)."""
+        if capacity < 0:
+            raise ValueError(f"capacity must be non-negative, got {capacity}")
         p = Pasture(
             name=name,
             mode=PastureMode(mode) if isinstance(mode, str) else mode,
@@ -227,6 +231,8 @@ class ShepherdsConsole:
         action: str = "throttle",
     ) -> Fence:
         """Register a new fence (conservation enforcer)."""
+        if limit < 0:
+            raise ValueError(f"limit must be non-negative, got {limit}")
         f = Fence(name=name, limit=limit, action=action)
         self.fences[name] = f
         self.log(f"Fence '{name}' created (limit={limit}, action={action})")
@@ -268,11 +274,15 @@ class ShepherdsConsole:
             except ValueError:
                 pass
         a.pasture = pasture
-        self.pastures[pasture].animals.append(animal)
+        # Avoid duplicate entries in the pasture's animal list
+        if animal not in self.pastures[pasture].animals:
+            self.pastures[pasture].animals.append(animal)
         self.log(f"Animal '{animal}' assigned to pasture '{pasture}'")
 
     def complete_task(self, animal: str, cost: float = 0.0) -> None:
         """Record a completed task, optionally consuming from fences."""
+        if cost < 0:
+            raise ValueError(f"cost must be non-negative, got {cost}")
         if animal not in self.kennel:
             raise KeyError(f"Unknown animal: {animal}")
         a = self.kennel[animal]
