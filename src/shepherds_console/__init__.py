@@ -295,6 +295,8 @@ class ShepherdsConsole:
                 self.pastures[a.pasture].tasks_in_progress -= 1
         if cost:
             for fence in self.fences.values():
+                if fence.limit <= 0:
+                    continue  # skip inactive fences
                 if not fence.consume(cost):
                     self.log(
                         f"Fence '{fence.name}' blocked consumption of {cost}",
