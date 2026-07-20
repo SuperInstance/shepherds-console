@@ -231,8 +231,8 @@ class ShepherdsConsole:
         action: str = "throttle",
     ) -> Fence:
         """Register a new fence (conservation enforcer)."""
-        if limit < 0:
-            raise ValueError(f"limit must be non-negative, got {limit}")
+        if limit <= 0:
+            raise ValueError(f"limit must be positive, got {limit}")
         f = Fence(name=name, limit=limit, action=action)
         self.fences[name] = f
         self.log(f"Fence '{name}' created (limit={limit}, action={action})")
