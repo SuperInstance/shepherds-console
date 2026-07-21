@@ -90,7 +90,7 @@ def render_html(console: ShepherdsConsole, refresh_seconds: int = 5) -> str:
 
     # Build audit entries
     log_rows: list[str] = []
-    for e in console.logs[-15:]:
+    for e in list(console.logs)[-15:]:
         log_rows.append(f"""
         <tr class="log-{_esc(e.severity.value)}">
           <td class="muted">{_esc(time.strftime('%H:%M:%S', time.localtime(e.timestamp)))}</td>

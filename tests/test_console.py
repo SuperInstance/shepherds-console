@@ -150,8 +150,7 @@ class TestShepherdsConsole:
         assert console.logs[-1].severity == Severity.WARN
 
     def test_log_trimming(self):
-        c = ShepherdsConsole()
-        c._max_logs = 10
+        c = ShepherdsConsole(max_logs=10)
         for i in range(20):
             c.log(f"msg-{i}")
         assert len(c.logs) == 10
@@ -255,7 +254,7 @@ class TestBugFixes:
         """Bug: Fence.consume() allowed negative amounts, reducing consumed value."""
         f = Fence(name="test", limit=100)
         f.consumed = 50
-        with pytest.raises(ValueError, match="must be non-negative"):
+        with pytest.raises(ValueError, match="must be a non-negative finite"):
             f.consume(-10)
         assert f.consumed == 50, "consumed should not change after negative consume attempt"
 
@@ -272,17 +271,17 @@ class TestBugFixes:
         'exhausted', but consume() still returns True on a throttle fence.
         Rejecting limit<=0 is the correct, safe behavior.
         """
-        with pytest.raises(ValueError, match="limit must be positive"):
+        with pytest.raises(ValueError, match="limit must be a positive finite"):
             console.add_fence("bad", limit=-100)
 
     def test_add_fence_zero_limit_rejected(self, console):
         """A zero-limit fence is silently permissive — must be rejected."""
-        with pytest.raises(ValueError, match="limit must be positive"):
+        with pytest.raises(ValueError, match="limit must be a positive finite"):
             console.add_fence("zero", limit=0)
 
     def test_complete_task_negative_cost(self, console):
         """Bug: complete_task() allowed negative cost, causing negative consumed."""
-        with pytest.raises(ValueError, match="cost must be non-negative"):
+        with pytest.raises(ValueError, match="cost must be a non-negative finite"):
             console.complete_task("worker-a", cost=-50)
 
     def test_assign_duplicate_animal_in_pasture(self, console):

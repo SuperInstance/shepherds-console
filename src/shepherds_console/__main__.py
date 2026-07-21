@@ -95,8 +95,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.web:
-        html_content = console.render_html()
-
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 self.send_response(200)

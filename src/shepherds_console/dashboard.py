@@ -185,7 +185,7 @@ def _try_rich(console: ShepherdsConsole) -> str | None:
     lt.add_column("Source", style="dim")
     lt.add_column("Message")
 
-    for e in console.logs[-10:]:
+    for e in list(console.logs)[-10:]:
         lt.add_row(
             _time_ago(e.timestamp),
             e.severity.value,
@@ -276,7 +276,7 @@ def render_terminal(console: ShepherdsConsole) -> str:
     # Audit trail
     lines.append(f"{_DIM}AUDIT TRAIL (Last 10){_RESET}")
     lines.append(f"  {'─' * 76}")
-    for e in console.logs[-10:]:
+    for e in list(console.logs)[-10:]:
         sev_c = _SEVERITY_COLOR.get(e.severity.value, "")
         lines.append(
             f"  {_time_ago(e.timestamp):<12} "

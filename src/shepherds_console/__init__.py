@@ -7,7 +7,9 @@ enforcers), the kennel (flux registry), and an audit trail of recent events.
 
 from __future__ import annotations
 
+import math
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
@@ -173,15 +175,21 @@ class Fence:
 
     def consume(self, amount: float) -> bool:
         """Try to consume from the budget. Returns True if allowed."""
-        if amount < 0:
-            raise ValueError(f"consume amount must be non-negative, got {amount}")
+        if amount < 0 or math.isnan(amount) or math.isinf(amount):
+            raise ValueError(f"consume amount must be a non-negative finite number, got {amount}")
         if not self.enabled:
             return True
         if self.consumed + amount > self.limit:
             self.violations += 1
             if self.action == "block":
                 return False
-            # throttle: allow but warn
+            # throttle: allow but cap at limit (don't grow unbounded)
+            self.consumed = self.limit
+            return True
+        # alert: same as throttle but doesn't consume past limit
+        if self.action == "alert" and self.consumed + amount > self.limit:
+            self.violations += 1
+            return True
         self.consumed += amount
         return True
 
@@ -226,12 +234,12 @@ class Animal:
 class ShepherdsConsole:
     """Main dashboard class — single-pane view of working animal infrastructure."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_logs: int = 500) -> None:
         self.pastures: dict[str, Pasture] = {}
         self.fences: dict[str, Fence] = {}
         self.kennel: dict[str, Animal] = {}
-        self.logs: list[LogEntry] = []
-        self._max_logs: int = 500
+        self.logs: deque[LogEntry] = deque(maxlen=max_logs)
+        self._max_logs: int = max_logs
 
     # ── Registration ──────────────────────────────────────────
 
@@ -242,8 +250,12 @@ class ShepherdsConsole:
         capacity: int = 10,
     ) -> Pasture:
         """Register a new pasture (PLATO room)."""
+        if not name or not isinstance(name, str):
+            raise ValueError("pasture name must be a non-empty string")
         if capacity < 0:
             raise ValueError(f"capacity must be non-negative, got {capacity}")
+        if name in self.pastures:
+            raise ValueError(f"pasture '{name}' already exists")
         p = Pasture(
             name=name,
             mode=PastureMode(mode) if isinstance(mode, str) else mode,
@@ -253,6 +265,8 @@ class ShepherdsConsole:
         self.log(f"Pasture '{name}' created (mode={p.mode.value}, capacity={capacity})")
         return p
 
+    _VALID_ACTIONS = frozenset({"throttle", "block", "alert"})
+
     def add_fence(
         self,
         name: str,
@@ -260,8 +274,16 @@ class ShepherdsConsole:
         action: str = "throttle",
     ) -> Fence:
         """Register a new fence (conservation enforcer)."""
-        if limit <= 0:
-            raise ValueError(f"limit must be positive, got {limit}")
+        if not name or not isinstance(name, str):
+            raise ValueError("fence name must be a non-empty string")
+        if limit <= 0 or math.isnan(limit) or math.isinf(limit):
+            raise ValueError(f"limit must be a positive finite number, got {limit}")
+        if action not in self._VALID_ACTIONS:
+            raise ValueError(
+                f"action must be one of {sorted(self._VALID_ACTIONS)}, got '{action}'"
+            )
+        if name in self.fences:
+            raise ValueError(f"fence '{name}' already exists")
         f = Fence(name=name, limit=limit, action=action)
         self.fences[name] = f
         self.log(f"Fence '{name}' created (limit={limit}, action={action})")
@@ -275,6 +297,19 @@ class ShepherdsConsole:
         health: str | Health = Health.HEALTHY,
     ) -> Animal:
         """Register a working animal in the kennel."""
+        if not name or not isinstance(name, str):
+            raise ValueError("animal name must be a non-empty string")
+        if name in self.kennel:
+            raise ValueError(f"animal '{name}' already exists in the kennel")
+        if pasture is not None and pasture not in self.pastures:
+            raise KeyError(f"pasture '{pasture}' does not exist")
+        # Check capacity before adding
+        if pasture and pasture in self.pastures:
+            p = self.pastures[pasture]
+            if p.occupancy >= p.capacity:
+                raise ValueError(
+                    f"pasture '{pasture}' is at capacity ({p.capacity}/{p.capacity})"
+                )
         a = Animal(
             name=name,
             pasture=pasture,
@@ -310,11 +345,15 @@ class ShepherdsConsole:
 
     def complete_task(self, animal: str, cost: float = 0.0) -> None:
         """Record a completed task, optionally consuming from fences."""
-        if cost < 0:
-            raise ValueError(f"cost must be non-negative, got {cost}")
+        if cost < 0 or math.isnan(cost) or math.isinf(cost):
+            raise ValueError(f"cost must be a non-negative finite number, got {cost}")
         if animal not in self.kennel:
             raise KeyError(f"Unknown animal: {animal}")
         a = self.kennel[animal]
+        if a.health in (Health.OFFLINE, Health.INJURED):
+            raise RuntimeError(
+                f"animal '{animal}' is {a.health.value} and cannot complete tasks"
+            )
         a.tasks_completed += 1
         a.last_active = time.time()
         if a.pasture and a.pasture in self.pastures:
@@ -354,6 +393,67 @@ class ShepherdsConsole:
             source=animal,
         )
 
+    # ── Lifecycle ─────────────────────────────────────────────
+
+    def remove_animal(self, name: str) -> Animal:
+        """Remove an animal from the kennel and its pasture."""
+        if name not in self.kennel:
+            raise KeyError(f"Unknown animal: {name}")
+        a = self.kennel.pop(name)
+        if a.pasture and a.pasture in self.pastures:
+            try:
+                self.pastures[a.pasture].animals.remove(name)
+            except ValueError:
+                pass
+        self.log(f"Animal '{name}' removed from kennel")
+        return a
+
+    def remove_pasture(self, name: str) -> Pasture:
+        """Remove a pasture. Animals assigned to it are orphaned (pasture=None)."""
+        if name not in self.pastures:
+            raise KeyError(f"Unknown pasture: {name}")
+        p = self.pastures.pop(name)
+        for a in self.kennel.values():
+            if a.pasture == name:
+                a.pasture = None
+        self.log(f"Pasture '{name}' removed ({len(p.animals)} animals orphaned)")
+        return p
+
+    def remove_fence(self, name: str) -> Fence:
+        """Remove a fence from the console."""
+        if name not in self.fences:
+            raise KeyError(f"Unknown fence: {name}")
+        f = self.fences.pop(name)
+        self.log(f"Fence '{name}' removed")
+        return f
+
+    def reset_fence(self, name: str) -> Fence:
+        """Reset a fence's consumed and violations for a new budget period."""
+        if name not in self.fences:
+            raise KeyError(f"Unknown fence: {name}")
+        f = self.fences[name]
+        old_consumed = f.consumed
+        old_violations = f.violations
+        f.consumed = 0.0
+        f.violations = 0
+        self.log(
+            f"Fence '{name}' reset (was consumed={old_consumed}, violations={old_violations})"
+        )
+        return f
+
+    def start_task(self, animal: str) -> None:
+        """Record that an animal has started a task (increments tasks_in_progress)."""
+        if animal not in self.kennel:
+            raise KeyError(f"Unknown animal: {animal}")
+        a = self.kennel[animal]
+        if a.health in (Health.OFFLINE, Health.INJURED):
+            raise RuntimeError(
+                f"animal '{animal}' is {a.health.value} and cannot start tasks"
+            )
+        if a.pasture and a.pasture in self.pastures:
+            self.pastures[a.pasture].tasks_in_progress += 1
+        self.log(f"Task started by '{animal}'", source=animal)
+
     # ── Logging ───────────────────────────────────────────────
 
     def log(
@@ -370,8 +470,6 @@ class ShepherdsConsole:
             source=source,
         )
         self.logs.append(entry)
-        if len(self.logs) > self._max_logs:
-            self.logs = self.logs[-self._max_logs:]
         return entry
 
     # ── Status ────────────────────────────────────────────────
@@ -382,7 +480,7 @@ class ShepherdsConsole:
             "pastures": {n: p.to_dict() for n, p in self.pastures.items()},
             "fences": {n: f.to_dict() for n, f in self.fences.items()},
             "kennel": {n: a.to_dict() for n, a in self.kennel.items()},
-            "logs": [e.to_dict() for e in self.logs[-20:]],
+            "logs": [e.to_dict() for e in list(self.logs)[-20:]],
             "summary": self._summary(),
         }
 
@@ -420,7 +518,7 @@ class ShepherdsConsole:
             "pastures": {n: p.to_dict() for n, p in self.pastures.items()},
             "fences": {n: f.to_dict() for n, f in self.fences.items()},
             "kennel": {n: a.to_dict() for n, a in self.kennel.items()},
-            "logs": [e.to_dict() for e in self.logs],
+            "logs": [e.to_dict() for e in list(self.logs)],
         }
         with open(path, "w") as fh:
             json.dump(data, fh, indent=2)

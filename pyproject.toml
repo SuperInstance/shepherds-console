@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shepherds-console"
-version = "0.2.0"
+version = "0.3.0"
 description = "Single-pane operations for working animal infrastructure"
 readme = "README.md"
 license = "MIT"
