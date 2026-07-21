@@ -10,9 +10,16 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol
 
-__version__ = "0.1.1"
+try:
+    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+    try:
+        __version__ = _pkg_version("shepherds-console")
+    except PackageNotFoundError:
+        __version__ = "0.0.0+dev"
+except ImportError:
+    __version__ = "0.2.0"
 __all__ = [
     "ShepherdsConsole",
     "Pasture",
@@ -22,6 +29,7 @@ __all__ = [
     "Health",
     "PastureMode",
     "Severity",
+    "FenceReport",
 ]
 
 __author__ = "SuperInstance"
@@ -51,6 +59,27 @@ class Severity(str, Enum):
     WARN = "warn"
     ERROR = "error"
     CRITICAL = "critical"
+
+
+class FenceReport(Protocol):
+    """Contract for external conservation enforcers to report state.
+
+    Any enforcer (FLUX bytecode, cocapn spectral, or custom) can implement
+    this to feed real fence state into the dashboard instead of the
+    dashboard inventing its own model.
+    """
+
+    name: str
+    limit: float
+    consumed: float
+    violations: int
+    action: str
+    enabled: bool
+
+    @property
+    def remaining(self) -> float: ...
+    @property
+    def budget_fraction(self) -> float: ...
 
 
 @dataclass
@@ -295,8 +324,8 @@ class ShepherdsConsole:
                 self.pastures[a.pasture].tasks_in_progress -= 1
         if cost:
             for fence in self.fences.values():
-                if fence.limit <= 0:
-                    continue  # skip inactive fences
+                if not fence.enabled:
+                    continue
                 if not fence.consume(cost):
                     self.log(
                         f"Fence '{fence.name}' blocked consumption of {cost}",
@@ -379,6 +408,93 @@ class ShepherdsConsole:
             "total_violations": total_violations,
             "total_tasks": sum(a.tasks_completed for a in self.kennel.values()),
         }
+
+    # ── Persistence ───────────────────────────────────────────
+
+    def save_state(self, path: str) -> None:
+        """Save full state to JSON. Critical for edge: survives restart."""
+        import json
+        data = {
+            "version": __version__,
+            "saved_at": time.time(),
+            "pastures": {n: p.to_dict() for n, p in self.pastures.items()},
+            "fences": {n: f.to_dict() for n, f in self.fences.items()},
+            "kennel": {n: a.to_dict() for n, a in self.kennel.items()},
+            "logs": [e.to_dict() for e in self.logs],
+        }
+        with open(path, "w") as fh:
+            json.dump(data, fh, indent=2)
+
+    @classmethod
+    def load_state(cls, path: str) -> "ShepherdsConsole":
+        """Load full state from JSON snapshot."""
+        import json
+        with open(path) as fh:
+            data = json.load(fh)
+        c = cls()
+        for name, d in data.get("fences", {}).items():
+            f = Fence(
+                name=d["name"],
+                limit=d["limit"],
+                consumed=d["consumed"],
+                action=d["action"],
+                violations=d["violations"],
+                enabled=d["enabled"],
+            )
+            c.fences[name] = f
+        for name, d in data.get("pastures", {}).items():
+            p = Pasture(
+                name=d["name"],
+                mode=PastureMode(d["mode"]),
+                capacity=d["capacity"],
+                animals=list(d.get("animals", [])),
+                tasks_completed=d.get("tasks_completed", 0),
+                tasks_in_progress=d.get("tasks_in_progress", 0),
+                throughput=d.get("throughput", 0.0),
+            )
+            c.pastures[name] = p
+        for name, d in data.get("kennel", {}).items():
+            a = Animal(
+                name=d["name"],
+                pasture=d.get("pasture"),
+                role=d.get("role", "flux"),
+                health=Health(d.get("health", "healthy")),
+                tasks_completed=d.get("tasks_completed", 0),
+                last_active=d.get("last_active", time.time()),
+                metadata=d.get("metadata", {}),
+            )
+            c.kennel[name] = a
+        for e in data.get("logs", []):
+            c.logs.append(LogEntry(
+                timestamp=e["timestamp"],
+                message=e["message"],
+                severity=Severity(e.get("severity", "info")),
+                source=e.get("source", "system"),
+            ))
+        return c
+
+    # ── External Enforcer Integration ─────────────────────────
+
+    def register_external_fence(self, report: FenceReport) -> None:
+        """Bind an external conservation enforcer (FLUX bytecode, cocapn, etc.)
+
+        The dashboard becomes a *view* onto real enforcer state rather than
+        inventing its own model. Implements Idea 3 from the audit.
+        """
+        f = Fence(
+            name=report.name,
+            limit=report.limit,
+            consumed=report.consumed,
+            action=report.action,
+            violations=report.violations,
+            enabled=report.enabled,
+        )
+        self.fences[report.name] = f
+        self.log(
+            f"External fence '{report.name}' registered "
+            f"(limit={report.limit}, consumed={report.consumed})",
+            source="external-enforcer",
+        )
 
     # ── Rendering ─────────────────────────────────────────────
 

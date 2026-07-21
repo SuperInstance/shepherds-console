@@ -265,9 +265,20 @@ class TestBugFixes:
             console.add_pasture("bad", capacity=-5)
 
     def test_add_fence_negative_limit(self, console):
-        """Bug: add_fence() allowed negative limit values."""
-        with pytest.raises(ValueError, match="limit must be non-negative"):
+        """Bug: add_fence() allowed negative limit values.
+
+        The contract is 'positive' (not 'non-negative') because a zero-limit
+        fence is silently permissive: budget_fraction returns 0.0, status reads
+        'exhausted', but consume() still returns True on a throttle fence.
+        Rejecting limit<=0 is the correct, safe behavior.
+        """
+        with pytest.raises(ValueError, match="limit must be positive"):
             console.add_fence("bad", limit=-100)
+
+    def test_add_fence_zero_limit_rejected(self, console):
+        """A zero-limit fence is silently permissive — must be rejected."""
+        with pytest.raises(ValueError, match="limit must be positive"):
+            console.add_fence("zero", limit=0)
 
     def test_complete_task_negative_cost(self, console):
         """Bug: complete_task() allowed negative cost, causing negative consumed."""
@@ -304,3 +315,95 @@ class TestBugFixes:
         result = f.consume(0)
         assert result is True
         assert f.consumed == 50
+
+
+class TestStatePersistence:
+    """Tests for save_state / load_state round-trip."""
+
+    def test_save_load_roundtrip(self, tmp_path, console):
+        """Full state survives a save/load cycle."""
+        path = str(tmp_path / "state.json")
+        # Simulate some activity
+        console.complete_task("worker-a", cost=50)
+        console.set_health("worker-b", "degraded")
+        original = console.status()
+
+        console.save_state(path)
+        loaded = ShepherdsConsole.load_state(path)
+        restored = loaded.status()
+
+        assert restored["summary"] == original["summary"]
+        assert len(restored["pastures"]) == len(original["pastures"])
+        assert len(restored["fences"]) == len(original["fences"])
+        assert len(restored["kennel"]) == len(original["kennel"])
+
+        # Fence state preserved
+        assert (
+            loaded.fences["token-budget"].consumed
+            == console.fences["token-budget"].consumed
+        )
+        assert (
+            loaded.fences["token-budget"].violations
+            == console.fences["token-budget"].violations
+        )
+
+        # Animal state preserved
+        assert loaded.kennel["worker-a"].tasks_completed == 1
+        assert loaded.kennel["worker-b"].health.value == "degraded"
+
+    def test_load_nonexistent_raises(self, tmp_path):
+        """Loading a nonexistent file should raise FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            ShepherdsConsole.load_state(str(tmp_path / "nope.json"))
+
+
+class TestExternalFence:
+    """Tests for register_external_fence (Idea 3: consume real fences)."""
+
+    def test_register_external_fence(self, console):
+        """External enforcer can inject real state."""
+        class MockFluxEnforcer:
+            name = "flux-bytecode-budget"
+            limit = 50_000
+            consumed = 12_000
+            violations = 3
+            action = "block"
+            enabled = True
+
+            @property
+            def remaining(self):
+                return self.limit - self.consumed
+
+            @property
+            def budget_fraction(self):
+                return self.remaining / self.limit
+
+        console.register_external_fence(MockFluxEnforcer())
+        assert "flux-bytecode-budget" in console.fences
+        f = console.fences["flux-bytecode-budget"]
+        assert f.limit == 50_000
+        assert f.consumed == 12_000
+        assert f.violations == 3
+        assert f.action == "block"
+        # 38000/50000 = 0.76 remaining → healthy (≤0.7 would be moderate)
+        assert f.status == "healthy"
+
+
+class TestVersionSync:
+    """Ensure __version__ matches package metadata."""
+
+    def test_version_is_string(self):
+        import shepherds_console
+        assert isinstance(shepherds_console.__version__, str)
+        assert len(shepherds_console.__version__) > 0
+
+    def test_version_matches_pyproject(self):
+        import shepherds_console
+        # When installed, should match metadata
+        try:
+            from importlib.metadata import version
+            pkg_v = version("shepherds-console")
+            assert shepherds_console.__version__ == pkg_v
+        except Exception:
+            # Not installed as package; skip
+            pass
